@@ -75,7 +75,7 @@ resource "aws_route_table_association" "public" {
 # Create Security Group (Firewall)
 resource "aws_security_group" "web" {
   name        = "CCF501-Web-SG"
-  description = "Security group for web application"
+  description = "Security group for Next.js application"
   vpc_id      = aws_vpc.main.id
 
   # Allow SSH
@@ -96,9 +96,18 @@ resource "aws_security_group" "web" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Allow Node.js app port
+  # Allow HTTPS
   ingress {
-    description = "Node app"
+    description = "HTTPS from anywhere"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow Next.js dev port
+  ingress {
+    description = "Next.js App"
     from_port   = 3000
     to_port     = 3000
     protocol    = "tcp"
@@ -123,60 +132,75 @@ resource "aws_instance" "web" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = "t2.micro"  # Free tier eligible
   subnet_id     = aws_subnet.public.id
-  key_name      = aws_key_pair.main.key_name
+  key_name      = var.key_pair_name
 
   vpc_security_group_ids = [aws_security_group.web.id]
 
   user_data = <<-EOF
     #!/bin/bash
+    # Update system
     apt-get update
-    apt-get install -y nodejs npm git nginx
+    apt-get upgrade -y
     
-    # Clone and setup the application
-    cd /home/ubuntu
-    git clone https://github.com/scotch-io/node-todo.git
-    cd node-todo
-    npm install
+    # Install Node.js 18.x and npm
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    apt-get install -y nodejs
     
-    # Install PM2 to keep app running
+    # Install git and nginx
+    apt-get install -y git nginx
+    
+    # Install PM2 globally
     npm install -g pm2
     
-    # Start the application
-    pm2 start server.js
+    # Create app directory
+    mkdir -p /var/www/nextjs-app
+    cd /var/www/nextjs-app
+    
+    # Clone your repository (you'll need to update this with your repo URL)
+    # git clone ${var.github_repo_url} .
+    
+    # For now, create a simple Next.js app
+    npx create-next-app@latest . --typescript --no-tailwind --no-eslint --app --no-src-dir --import-alias "@/*"
+    
+    # Install dependencies
+    npm install
+    
+    # Build the Next.js app
+    npm run build
+    
+    # Start the app with PM2
+    pm2 start npm --name "nextjs-app" -- start
     pm2 startup systemd
     pm2 save
     
     # Configure Nginx as reverse proxy
-    cat > /etc/nginx/sites-available/default <<EOL
+    cat > /etc/nginx/sites-available/default <<'EOL'
     server {
         listen 80;
         server_name _;
         
         location / {
-            proxy_pass http://localhost:8080;
+            proxy_pass http://localhost:3000;
             proxy_http_version 1.1;
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection 'upgrade';
             proxy_set_header Host \$host;
             proxy_cache_bypass \$http_upgrade;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
         }
     }
     EOL
     
+    # Restart Nginx
     systemctl restart nginx
+    systemctl enable nginx
   EOF
 
   tags = merge(local.common_tags, {
-    Name = "CCF501-Web-Server"
+    Name = "CCF501-NextJS-Server"
   })
-}
-
-# Create Key Pair for SSH
-resource "aws_key_pair" "main" {
-  key_name   = "ccf501-key"
-  public_key = file("~/.ssh/id_rsa.pub")  # You'll need to generate this
-
-  tags = local.common_tags
 }
 
 # Data sources
