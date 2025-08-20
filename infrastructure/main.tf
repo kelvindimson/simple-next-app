@@ -1,4 +1,10 @@
 terraform {
+  cloud{
+    organization = "OneForge"  # Replace with your Terraform Cloud organization name
+    workspaces {
+      name = "CCF501-Assessment"
+    }
+  }
   required_providers {
     aws = {
       source  = "hashicorp/aws"
